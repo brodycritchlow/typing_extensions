@@ -3,6 +3,8 @@ name: Test against CPython's test_typing.py
 on:
   push:
     branches:
+      - main
+      - workflow-tests
   pull_request:
   workflow_dispatch:
 
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   test-cpython-typing:
     name: Test CPython typing (${{ matrix.python-version }})
-    
+
     strategy:
       fail-fast: false
       matrix:
@@ -37,25 +39,25 @@ jobs:
             cpython-branch: "3.13"
           - python-version: "3.14"
             cpython-branch: "main"
-    
+
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
-      
+
       - name: Download CPython test_typing.py
         run: |
           # Download test_typing.py from the appropriate CPython branch
           curl -sSL "https://raw.githubusercontent.com/python/cpython/${{ matrix.cpython-branch }}/Lib/test/test_typing.py" -o test_typing_cpython.py
-          
+
       - name: Prepare test file with typing_extensions imports
         run: |
           # Create a Python script to transform the imports
@@ -82,6 +84,43 @@ jobs:
                   content = re.sub(pattern, replacement, content, flags=flags[0])
               else:
                   content = re.sub(pattern, replacement, content)
+
+          # Ensure typing_extensions is imported
+          if 'import typing_extensions' not in content:
+              # Add import at the beginning after the module docstring and other imports
+              lines = content.split('\n')
+              import_index = 0
+              in_docstring = False
+              docstring_delim = None
+
+              for i, line in enumerate(lines):
+                  # Skip module docstring
+                  if i == 0 and (line.startswith('"""') or line.startswith("'''")):
+                      in_docstring = True
+                      docstring_delim = '"""' if line.startswith('"""') else "'''"
+                      if line.count(docstring_delim) >= 2:  # Single line docstring
+                          in_docstring = False
+                      import_index = i + 1
+                      continue
+
+                  if in_docstring:
+                      if docstring_delim in line:
+                          in_docstring = False
+                      import_index = i + 1
+                      continue
+
+                  # Find where imports start
+                  if line.startswith('import ') or line.startswith('from '):
+                      import_index = i
+                      break
+                  elif line and not line.startswith('#'):
+                      # If we hit code, insert before it
+                      import_index = i
+                      break
+
+              # Insert the import
+              lines.insert(import_index, 'import typing_extensions')
+              content = '\n'.join(lines)
 
           # Also need to handle cases where typing is used directly
           # Replace typing.X with typing_extensions.X where appropriate
@@ -115,17 +154,17 @@ jobs:
           EOF
 
           python transform_imports.py
-          
+
       - name: Run CPython typing tests with typing_extensions
         run: |
           cd src
           # Copy the transformed test file
           cp ../test_typing_transformed.py test_typing_cpython.py
-          
+
           # Run the tests
           python -m unittest test_typing_cpython -v
         continue-on-error: true
-        
+
       - name: Generate test report
         if: always()
         run: |
@@ -134,13 +173,13 @@ jobs:
           python -c "
           import subprocess
           import json
-          
+
           result = subprocess.run(
               ['python', '-m', 'unittest', 'test_typing_cpython', '-v'],
               capture_output=True,
               text=True
           )
-          
+
           print('=== Test Summary ===')
           print(f'Return code: {result.returncode}')
           print(f'Tests output preview:')
@@ -148,4 +187,3 @@ jobs:
           print('---')
           print(result.stderr[:2000] if result.stderr else 'No stderr')
           "
-
