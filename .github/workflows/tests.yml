@@ -3,7 +3,6 @@ name: Test against CPython's test_typing.py
 on:
   push:
     branches:
-      - main
   pull_request:
   workflow_dispatch:
 
