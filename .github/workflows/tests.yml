@@ -1,0 +1,152 @@
+name: Test against CPython's test_typing.py
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: 1
+  PIP_DISABLE_PIP_VERSION_CHECK: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test-cpython-typing:
+    name: Test CPython typing (${{ matrix.python-version }})
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.9"
+            cpython-branch: "3.9"
+          - python-version: "3.10"
+            cpython-branch: "3.10"
+          - python-version: "3.11"
+            cpython-branch: "3.11"
+          - python-version: "3.12"
+            cpython-branch: "3.12"
+          - python-version: "3.13"
+            cpython-branch: "3.13"
+          - python-version: "3.14"
+            cpython-branch: "main"
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+      
+      - name: Download CPython test_typing.py
+        run: |
+          # Download test_typing.py from the appropriate CPython branch
+          curl -sSL "https://raw.githubusercontent.com/python/cpython/${{ matrix.cpython-branch }}/Lib/test/test_typing.py" -o test_typing_cpython.py
+          
+      - name: Prepare test file with typing_extensions imports
+        run: |
+          # Create a Python script to transform the imports
+          cat > transform_imports.py << 'EOF'
+          import re
+          import sys
+
+          with open('test_typing_cpython.py', 'r') as f:
+              content = f.read()
+
+          # Replace typing imports with typing_extensions
+          # Handle various import patterns
+          patterns = [
+              # from typing import X, Y, Z
+              (r'from typing import ([^(]+?)(?=\n|;)', r'from typing_extensions import \1'),
+              # import typing
+              (r'^import typing$', 'import typing_extensions as typing', re.MULTILINE),
+              # import typing as X
+              (r'^import typing as (\w+)$', r'import typing_extensions as \1', re.MULTILINE),
+          ]
+
+          for pattern, replacement, *flags in patterns:
+              if flags:
+                  content = re.sub(pattern, replacement, content, flags=flags[0])
+              else:
+                  content = re.sub(pattern, replacement, content)
+
+          # Also need to handle cases where typing is used directly
+          # Replace typing.X with typing_extensions.X where appropriate
+          typing_attrs = [
+              'Annotated', 'Any', 'Callable', 'ClassVar', 'Concatenate', 'Final',
+              'ForwardRef', 'Generic', 'Literal', 'Optional', 'ParamSpec',
+              'Protocol', 'Tuple', 'Type', 'TypeVar', 'Union', 'cast',
+              'get_args', 'get_origin', 'get_type_hints', 'NewType',
+              'NoReturn', 'overload', 'TypedDict', 'NamedTuple',
+              'TypeAlias', 'TypeGuard', 'TypeIs', 'Never', 'assert_never',
+              'assert_type', 'reveal_type', 'Self', 'TypeVarTuple', 'Unpack',
+              'dataclass_transform', 'override', 'deprecated', 'NotRequired',
+              'Required', 'ReadOnly', 'TypeAliasType', 'Doc', 'NoDefault',
+              'TypeForm', 'Buffer', 'get_annotations', 'get_overloads',
+              'clear_overloads', 'get_protocol_members', 'is_protocol',
+              'is_typeddict', 'LiteralString', 'get_original_bases',
+              'final', 'no_type_check', 'evaluate_forward_ref'
+          ]
+
+          # Handle typing. prefixed usage
+          for attr in typing_attrs:
+              # Only replace if not already imported from typing_extensions
+              if f'from typing_extensions import' not in content or attr not in content.split('from typing_extensions import')[1].split('\n')[0]:
+                  content = re.sub(rf'\btyping\.{attr}\b', f'typing_extensions.{attr}', content)
+
+          # Write the transformed file
+          with open('test_typing_transformed.py', 'w') as f:
+              f.write(content)
+
+          print("Import transformation complete")
+          EOF
+
+          python transform_imports.py
+          
+      - name: Run CPython typing tests with typing_extensions
+        run: |
+          cd src
+          # Copy the transformed test file
+          cp ../test_typing_transformed.py test_typing_cpython.py
+          
+          # Run the tests
+          python -m unittest test_typing_cpython -v
+        continue-on-error: true
+        
+      - name: Generate test report
+        if: always()
+        run: |
+          # Generate a summary of which tests passed/failed
+          cd src
+          python -c "
+          import subprocess
+          import json
+          
+          result = subprocess.run(
+              ['python', '-m', 'unittest', 'test_typing_cpython', '-v'],
+              capture_output=True,
+              text=True
+          )
+          
+          print('=== Test Summary ===')
+          print(f'Return code: {result.returncode}')
+          print(f'Tests output preview:')
+          print(result.stdout[:2000] if result.stdout else 'No stdout')
+          print('---')
+          print(result.stderr[:2000] if result.stderr else 'No stderr')
+          "
+
