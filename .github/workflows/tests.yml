@@ -85,8 +85,8 @@ jobs:
               else:
                   content = re.sub(pattern, replacement, content)
 
-          # Ensure typing_extensions is imported
-          if 'import typing_extensions' not in content:
+          # Ensure typing_extensions is imported (only if we're not using the alias pattern)
+          if 'import typing_extensions' not in content and 'import typing_extensions as typing' not in content:
               # Add import at the beginning after the module docstring and other imports
               lines = content.split('\n')
               import_index = 0
@@ -141,10 +141,17 @@ jobs:
           ]
 
           # Handle typing. prefixed usage
+          # Check if we're using 'import typing_extensions as typing' pattern
+          has_typing_as_alias = 'import typing_extensions as typing' in content
+
           for attr in typing_attrs:
-              # Only replace if not already imported from typing_extensions
-              if f'from typing_extensions import' not in content or attr not in content.split('from typing_extensions import')[1].split('\n')[0]:
-                  content = re.sub(rf'\btyping\.{attr}\b', f'typing_extensions.{attr}', content)
+              if has_typing_as_alias:
+                  # If typing is already aliased to typing_extensions, no need to replace
+                  continue
+              else:
+                  # Only replace if not already imported from typing_extensions
+                  if f'from typing_extensions import' not in content or attr not in content.split('from typing_extensions import')[1].split('\n')[0]:
+                      content = re.sub(rf'\btyping\.{attr}\b', f'typing_extensions.{attr}', content)
 
           # Write the transformed file
           with open('test_typing_transformed.py', 'w') as f:
