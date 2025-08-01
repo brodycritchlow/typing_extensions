@@ -38,6 +38,8 @@ jobs:
           - python-version: "3.13"
             cpython-branch: "3.13"
           - python-version: "3.14"
+            cpython-branch: "3.14"
+          - python-version: "3.15"
             cpython-branch: "main"
 
     runs-on: ubuntu-latest
@@ -55,12 +57,10 @@ jobs:
 
       - name: Download CPython test_typing.py
         run: |
-          # Download test_typing.py from the appropriate CPython branch
           curl -sSL "https://raw.githubusercontent.com/python/cpython/${{ matrix.cpython-branch }}/Lib/test/test_typing.py" -o test_typing_cpython.py
 
       - name: Prepare test file with typing_extensions imports
         run: |
-          # Create a Python script to transform the imports
           cat > transform_imports.py << 'EOF'
           import re
           import sys
@@ -68,14 +68,9 @@ jobs:
           with open('test_typing_cpython.py', 'r') as f:
               content = f.read()
 
-          # Replace typing imports with typing_extensions
-          # Handle various import patterns
           patterns = [
-              # from typing import X, Y, Z
               (r'from typing import ([^(]+?)(?=\n|;)', r'from typing_extensions import \1'),
-              # import typing
               (r'^import typing$', 'import typing_extensions as typing', re.MULTILINE),
-              # import typing as X
               (r'^import typing as (\w+)$', r'import typing_extensions as \1', re.MULTILINE),
           ]
 
@@ -85,20 +80,17 @@ jobs:
               else:
                   content = re.sub(pattern, replacement, content)
 
-          # Ensure typing_extensions is imported (only if we're not using the alias pattern)
           if 'import typing_extensions' not in content and 'import typing_extensions as typing' not in content:
-              # Add import at the beginning after the module docstring and other imports
               lines = content.split('\n')
               import_index = 0
               in_docstring = False
               docstring_delim = None
 
               for i, line in enumerate(lines):
-                  # Skip module docstring
                   if i == 0 and (line.startswith('"""') or line.startswith("'''")):
                       in_docstring = True
                       docstring_delim = '"""' if line.startswith('"""') else "'''"
-                      if line.count(docstring_delim) >= 2:  # Single line docstring
+                      if line.count(docstring_delim) >= 2:
                           in_docstring = False
                       import_index = i + 1
                       continue
@@ -109,21 +101,16 @@ jobs:
                       import_index = i + 1
                       continue
 
-                  # Find where imports start
                   if line.startswith('import ') or line.startswith('from '):
                       import_index = i
                       break
                   elif line and not line.startswith('#'):
-                      # If we hit code, insert before it
                       import_index = i
                       break
 
-              # Insert the import
               lines.insert(import_index, 'import typing_extensions')
               content = '\n'.join(lines)
 
-          # Also need to handle cases where typing is used directly
-          # Replace typing.X with typing_extensions.X where appropriate
           typing_attrs = [
               'Annotated', 'Any', 'Callable', 'ClassVar', 'Concatenate', 'Final',
               'ForwardRef', 'Generic', 'Literal', 'Optional', 'ParamSpec',
@@ -140,20 +127,15 @@ jobs:
               'final', 'no_type_check', 'evaluate_forward_ref'
           ]
 
-          # Handle typing. prefixed usage
-          # Check if we're using 'import typing_extensions as typing' pattern
           has_typing_as_alias = 'import typing_extensions as typing' in content
 
           for attr in typing_attrs:
               if has_typing_as_alias:
-                  # If typing is already aliased to typing_extensions, no need to replace
                   continue
               else:
-                  # Only replace if not already imported from typing_extensions
                   if f'from typing_extensions import' not in content or attr not in content.split('from typing_extensions import')[1].split('\n')[0]:
                       content = re.sub(rf'\btyping\.{attr}\b', f'typing_extensions.{attr}', content)
 
-          # Write the transformed file
           with open('test_typing_transformed.py', 'w') as f:
               f.write(content)
 
@@ -165,17 +147,12 @@ jobs:
       - name: Run CPython typing tests with typing_extensions
         run: |
           cd src
-          # Copy the transformed test file
           cp ../test_typing_transformed.py test_typing_cpython.py
-
-          # Run the tests
           python -m unittest test_typing_cpython -v
-        continue-on-error: true
 
       - name: Generate test report
-        if: always()
+        if: failure()
         run: |
-          # Generate a summary of which tests passed/failed
           cd src
           python -c "
           import subprocess
@@ -187,10 +164,6 @@ jobs:
               text=True
           )
 
-          print('=== Test Summary ===')
-          print(f'Return code: {result.returncode}')
-          print(f'Tests output preview:')
-          print(result.stdout[:2000] if result.stdout else 'No stdout')
-          print('---')
-          print(result.stderr[:2000] if result.stderr else 'No stderr')
+          print(result.stdout)
+          print(result.stderr)
           "
